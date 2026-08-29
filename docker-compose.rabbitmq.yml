@@ -1,0 +1,42 @@
+services:
+  rabbitmq:
+    # 固定小版本，避免以后执行 docker compose pull 时自动升级到不兼容版本。
+    image: rabbitmq:4.3.4-management
+    container_name: goshop-rabbitmq
+    hostname: goshop-rabbitmq
+    restart: unless-stopped
+
+    environment:
+      # 不要使用 guest/guest。
+      # RabbitMQ 默认限制 guest 只能从本机访问，而且生产环境也不安全。
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+
+      # 给 GoShop 使用独立虚拟主机，避免未来多个项目的交换机、队列混在一起。
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST:-/goshop}
+
+      # 明确容器时区，便于管理后台和日志排查。
+      TZ: Asia/Shanghai
+
+    ports:
+      # Java 程序通过 AMQP 连接的端口。
+      - "5672:5672"
+
+      # RabbitMQ Management 管理后台端口。
+      - "15672:15672"
+
+    volumes:
+      # RabbitMQ 消息、队列元数据等持久化到 Docker 命名卷。
+      # 删除容器不会直接删除数据卷。
+      - rabbitmq-data:/var/lib/rabbitmq
+
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  rabbitmq-data:
+    name: goshop-rabbitmq-data

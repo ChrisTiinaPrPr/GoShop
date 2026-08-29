@@ -1,0 +1,47 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+# 本地环境变量可能包含数据库口令、模型密钥和第三方凭据，禁止提交。
+.env
+.env.*
+!.env.example
+!.env.agent.example
+
+# Codex/Agent 本地工作状态只属于当前开发环境。
+.agents/
+.codex/
+.codex-resume-render/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Frontend ###
+**/node_modules/
+**/dist/

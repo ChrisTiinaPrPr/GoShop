@@ -1,0 +1,243 @@
+server:
+  port: 8080
+  tomcat:
+    max-http-form-post-size: -1
+    max-swallow-size: -1
+
+spring:
+  mvc:
+    # Agent 的模型总超时默认是 45 秒，MVC 异步响应必须留出额外时间完成失败收口和最终 SSE 事件。
+    async:
+      request-timeout: ${AGENT_SSE_REQUEST_TIMEOUT:60s}
+  config:
+    # Spring Boot 默认不会像 Docker Compose 那样自动读取项目根目录的 .env。
+    # 使用扩展名提示把 .env 按 properties（KEY=VALUE）格式导入，供本地 IDEA 启动使用。
+    # optional 表示部署环境没有 .env 时也可以启动，此时由容器/服务器环境变量提供配置。
+    import: "optional:file:.env[.properties]"
+  application:
+    name: goshop
+  ai:
+    model:
+      # 默认关闭模型自动配置，保证没有 API Key 时原商城仍能正常启动。
+      # 开发 Agent 时在 .env 中设置 AI_MODEL_PROVIDER=openai。
+      chat: ${AI_MODEL_PROVIDER:none}
+      # 导购 RAG 使用独立 Embedding 开关，不能假设聊天模型服务同时支持向量接口。
+      embedding: ${AI_EMBEDDING_PROVIDER:none}
+      # 本项目不使用语音、图像和内容审核模型，显式关闭对应自动配置，
+      # 避免仅引入 OpenAI starter 就要求额外的 SDK 凭据。
+      audio:
+        speech: none
+        transcription: none
+      image: none
+      moderation: none
+    openai:
+      # 可指向 OpenAI 官方地址，也可指向兼容 OpenAI 协议的国内/本地模型服务。
+      base-url: ${AI_BASE_URL:https://api.openai.com}
+      # 禁止在 application.yml 中填写真实密钥，只能通过 .env 或部署环境注入。
+      api-key: ${AI_API_KEY:}
+      chat:
+        # 模型名由实际供应商决定；必须支持流式输出和 Tool Calling。
+        model: ${AI_CHAT_MODEL:gpt-5-mini}
+      embedding:
+        # 可与聊天模型使用完全不同的 OpenAI 兼容供应商，避免 DeepSeek 等服务无 Embedding 接口。
+        base-url: ${AI_EMBEDDING_BASE_URL:https://api.siliconflow.cn/v1}
+        api-key: ${RAG_EMBEDDING_API_KEY:}
+        model: ${AI_EMBEDDING_MODEL:Qwen/Qwen3-Embedding-8B}
+    vectorstore:
+      # 默认关闭 Qdrant 自动配置；启用 RAG 时设置为 qdrant。
+      type: ${MERCHANT_AI_VECTOR_STORE_TYPE:none}
+      qdrant:
+        host: ${QDRANT_HOST:localhost}
+        port: ${QDRANT_GRPC_PORT:6334}
+        use-tls: ${QDRANT_USE_TLS:false}
+        # 默认值仅用于只监听 localhost 的 Compose 开发实例，部署环境必须覆盖。
+        api-key: ${QDRANT_API_KEY:}
+        collection-name: ${QDRANT_COLLECTION:goshop_merchant_knowledge}
+        # 首次启用时由 Spring AI 按 Embedding 维度创建集合。
+        initialize-schema: ${QDRANT_INITIALIZE_SCHEMA:true}
+  datasource:
+    url: "jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:goshop}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai"
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 3s
+  jackson:
+    default-property-inclusion: non_null
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
+      resolve-lazily: true
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:goshop}
+    password: ${RABBITMQ_PASSWORD:}
+    virtual-host: ${RABBITMQ_VHOST:/goshop}
+
+    # 连接建立最长等待时间。
+    connection-timeout: 5s
+
+    # 开启发布确认。
+    # RabbitMQ 收到并处理消息后，会向生产者返回 ACK 或 NACK。
+    publisher-confirm-type: correlated
+
+    # 如果交换机存在，但 routing key 没有匹配任何队列，
+    # RabbitMQ 会把消息退回给生产者，而不是静默丢弃。
+    publisher-returns: true
+
+    template:
+      # 配合 publisher-returns 使用。
+      # mandatory=true 时，没有路由到队列的消息会触发 returned message。
+      mandatory: true
+
+    listener:
+      simple:
+        # AUTO 并不表示一收到消息就确认。
+        # 只有 @RabbitListener 方法正常返回，Spring 才会发送 ACK。
+        # 如果方法抛出异常，本次消息不会被确认。
+        acknowledge-mode: auto
+
+        # 每个消费者最多预取 10 条尚未确认的消息。
+        # 数量太大可能导致某个消费者堆积大量未确认消息。
+        prefetch: 10
+
+        # 最少启动 2 个消费线程，最多扩展到 4 个。
+        concurrency: 2
+        max-concurrency: 4
+
+        # 重试耗尽后不能无限 requeue，否则坏消息会形成死循环。
+        # false 表示最终拒绝消息；队列配置了 DLX 后会进入死信队列。
+        default-requeue-rejected: false
+
+        retry:
+          enabled: true
+
+          # 包含第一次处理，总共最多执行 4 次。
+          # 第一次失败后等待 1 秒。
+          initial-interval: 1s
+
+          # 后续间隔按 2 倍增加：1 秒、2 秒、4 秒。
+          multiplier: 2
+
+          # 最长等待不超过 10 秒。
+          max-interval: 10s
+          max-retries: 3
+
+goshop:
+  product-cache:
+    # 热点商品详情缓存总开关；Redis 故障时服务会自动降级查询 MySQL。
+    enabled: ${PRODUCT_CACHE_ENABLED:true}
+    # 正常详情缓存基础 TTL，并额外叠加独立随机抖动，避免大批 key 同时过期。
+    detail-ttl: ${PRODUCT_CACHE_DETAIL_TTL:30m}
+    # 不存在、已下架或无启用 SKU 的商品使用短空值缓存，防止重复穿透数据库。
+    null-ttl: ${PRODUCT_CACHE_NULL_TTL:2m}
+    max-ttl-jitter: ${PRODUCT_CACHE_MAX_TTL_JITTER:10m}
+    # 热点 key 失效时只允许一个实例重建；锁有租约且通过 Lua 只释放自己的锁。
+    lock-ttl: ${PRODUCT_CACHE_LOCK_TTL:10s}
+    lock-wait: ${PRODUCT_CACHE_LOCK_WAIT:30ms}
+    lock-retry-times: ${PRODUCT_CACHE_LOCK_RETRY_TIMES:8}
+  agent:
+    # 业务功能开关。它与 spring.ai.model.chat 分开，便于生产环境快速关闭入口。
+    enabled: ${AGENT_ENABLED:false}
+
+    # 每次只把最近若干个完整“用户 + 助手”回合交给模型，避免上下文无限增长。
+    max-history-turns: ${AGENT_MAX_HISTORY_TURNS:10}
+
+    # 单个用户每分钟最多提交的 Agent 消息数。
+    rate-limit-per-minute: ${AGENT_RATE_LIMIT_PER_MINUTE:10}
+
+    # 一次运行允许的最大工具调用次数，防止模型陷入循环。
+    max-tool-calls: ${AGENT_MAX_TOOL_CALLS:8}
+
+    # 一次 Agent 运行的总超时时间，单位秒。
+    run-timeout-seconds: ${AGENT_RUN_TIMEOUT_SECONDS:45}
+
+    # 加入购物车待确认动作的有效期，单位分钟。
+    action-ttl-minutes: ${AGENT_ACTION_TTL_MINUTES:10}
+
+    # 用户单条输入的最大字符数。
+    max-input-chars: ${AGENT_MAX_INPUT_CHARS:1000}
+
+    # 模型单次回答的最大输出 Token；后续由 Agent 配置类映射到模型选项。
+    max-output-tokens: ${AGENT_MAX_OUTPUT_TOKENS:1200}
+  chat:
+    # 浏览器握手 Origin 白名单。环境变量使用逗号分隔，生产环境应填写两个真实 HTTPS 站点。
+    allowed-origins: ${CHAT_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:5174}
+    # 单张聊天图片大小上限（MB）；后续图片消息接口会同时校验 Multipart 文件实际字节数。
+    image-max-size-mb: ${CHAT_IMAGE_MAX_SIZE_MB:5}
+    # 单账号每分钟消息上限；后续发送接口将以该值构造 Redis 限流窗口。
+    message-rate-per-minute: ${CHAT_MESSAGE_RATE_PER_MINUTE:30}
+    oss: # 聊天图片必须使用私有 Bucket，不能使用商品图片的公共 Bucket。
+          bucket-name: ${ALIYUN_OSS_CHAT_BUCKET_NAME:}
+
+          # 每次查询消息时生成短期签名 URL。
+          signed-url-minutes: ${CHAT_IMAGE_SIGNED_URL_MINUTES:10}
+  merchant-ai:
+    documents:
+      # 当前全局 multipart 上限为 5 MB，此处不能配置得更大。
+      max-size-mb: ${MERCHANT_AI_DOCUMENT_MAX_SIZE_MB:5}
+      # 限制单店知识库规模，避免无限占用 OSS、解析与向量资源。
+      max-documents-per-assistant: ${MERCHANT_AI_MAX_DOCUMENTS:20}
+      # 导购文档必须使用私有 Bucket；未单独配置时复用聊天私有 Bucket。
+      bucket-name: ${ALIYUN_OSS_AI_BUCKET_NAME:${ALIYUN_OSS_CHAT_BUCKET_NAME}}
+    rag:
+      # 需要同时启用 Embedding Provider 和 Qdrant VectorStore 才能开始解析。
+      enabled: ${MERCHANT_AI_RAG_ENABLED:false}
+      chunk-size: ${MERCHANT_AI_RAG_CHUNK_SIZE:600}
+      min-chunk-chars: ${MERCHANT_AI_RAG_MIN_CHUNK_CHARS:100}
+      min-embed-chars: ${MERCHANT_AI_RAG_MIN_EMBED_CHARS:10}
+      max-chunks: ${MERCHANT_AI_RAG_MAX_CHUNKS:500}
+      max-extracted-chars: ${MERCHANT_AI_RAG_MAX_EXTRACTED_CHARS:500000}
+      processing-timeout: ${MERCHANT_AI_RAG_PROCESSING_TIMEOUT:15m}
+      core-pool-size: ${MERCHANT_AI_RAG_CORE_POOL_SIZE:1}
+      max-pool-size: ${MERCHANT_AI_RAG_MAX_POOL_SIZE:2}
+      queue-capacity: ${MERCHANT_AI_RAG_QUEUE_CAPACITY:50}
+  oss:
+    endpoint: ${ALIYUN_OSS_ENDPOINT:}
+    access-key-id: ${ALIYUN_OSS_ACCESS_KEY_ID:}
+    access-key-secret: ${ALIYUN_OSS_ACCESS_KEY_SECRET:}
+    bucket-name: ${ALIYUN_OSS_BUCKET_NAME:}
+  jwt:
+      # HS256 签名密钥至少 32 个字符；不提供默认值，必须从本地或部署环境注入。
+      secret: ${JWT_SECRET:}
+      access-token-minutes: ${JWT_ACCESS_TOKEN_MINUTES:120}
+  payment:
+    alipay:
+      app-id: ${ALIPAY_APP_ID:}
+      private-key: ${ALIPAY_PRIVATE_KEY:}
+      public-key: ${ALIPAY_PUBLIC_KEY:}
+      gateway: https://openapi-sandbox.dl.alipaydev.com/gateway.do
+      # 支付宝服务器通过公网 POST 此地址；Quick Tunnel 变化后应更新环境变量。
+      notify-url: ${ALIPAY_NOTIFY_URL:http://localhost:8080/api/v1/payments/alipay/callback}
+      # 支付完成后，用户浏览器通过 GET 回到后端，再由后端重定向到 Vue 页面。
+      return-url: ${ALIPAY_RETURN_URL:http://localhost:8080/api/v1/payments/alipay/return}
+      # 同步回跳只用于页面展示，不能替代 notify-url 的验签与支付状态更新。
+      frontend-return-url: ${PAYMENT_FRONTEND_RETURN_URL:http://localhost:5173/orders}
+  mq: # 正式环境保持 30 分钟。
+      # 联调时可以临时通过环境变量设置为 60s。
+      order-timeout: ${GOSHOP_MQ_ORDER_TIMEOUT:30m}
+
+      # Outbox 每秒检查一次是否存在待发送消息。
+      outbox-publish-interval-ms: 1000
+
+      # 每轮最多发送 100 条，避免一次任务占用线程太久。
+      outbox-batch-size: 100
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+  global-config:
+    db-config:
+      id-type: assign_id
+
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+  api-docs:
+    path: /v3/api-docs

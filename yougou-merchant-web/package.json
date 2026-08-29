@@ -1,0 +1,22 @@
+{
+  "name": "yougou-merchant-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "latest",
+    "@stomp/stompjs": "^7.3.0",
+    "@vitejs/plugin-vue": "latest",
+    "axios": "latest",
+    "element-plus": "latest",
+    "pinia": "latest",
+    "vite": "latest",
+    "vue": "latest",
+    "vue-router": "latest"
+  }
+}
